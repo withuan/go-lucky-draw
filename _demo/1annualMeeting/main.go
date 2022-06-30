@@ -11,10 +11,12 @@ import (
 	"github.com/kataras/iris/v12/mvc"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
 
 var userList []string
+var mu sync.Mutex //互斥锁
 
 type lotteryController struct {
 	Ctx iris.Context
@@ -29,6 +31,7 @@ func newApp() *iris.Application {
 func main() {
 	app := newApp()
 	userList = []string{}
+	mu = sync.Mutex{} //初始化，在PostImport和GetLucky加，因为这两个会改变userList的数据
 
 	err := app.Run(iris.Addr(":8080"))
 	if err != nil {
@@ -46,6 +49,10 @@ func (c *lotteryController) Get() string {
 func (c *lotteryController) PostImport() string {
 	strUsers := c.Ctx.FormValue("users")  // "users=zhaokai,liyuan"
 	users := strings.Split(strUsers, ",") // users为 [zhaokai liyuan]
+
+	mu.Lock()
+	defer mu.Unlock()
+
 	count1 := len(userList)
 	for _, u := range users {
 		u = strings.TrimSpace(u)
@@ -54,11 +61,14 @@ func (c *lotteryController) PostImport() string {
 		}
 	}
 	count2 := len(userList)
-	return fmt.Sprintf("当前总共参与抽奖的用户数：%d, 成功导入的用户数：%d\n", count2, count2-count1)
+	return fmt.Sprintf("当前总共参与抽奖的人数：%d, 成功导入的用户数：%d\n", count2, count2-count1)
 }
 
 // GetLucky GET http://localhost:8080/lucky
 func (c *lotteryController) GetLucky() string {
+	mu.Lock()
+	defer mu.Unlock()
+
 	count := len(userList)
 	if count > 1 {
 		seed := time.Now().UnixNano()
