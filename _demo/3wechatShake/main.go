@@ -1,6 +1,11 @@
 /**
  *	微信摇一摇
  *	基础功能：/lucky 只有一个抽奖的接口
+ *	压力测试： wrk只支持linux环境不支持windows环境（所以没有进行压测这一步，单独执行http://localhost:8080/lucky，log日志正常）
+ *	压力测试： 视频中，执行下面wrk压测，日志超过20000条，超发了，线程不安全，并发问题
+ *	解决办法一： 加互斥锁sync.Mutex
+ *	解决办法的效果： 加锁后，清空log，重新运行下面的压测命令，日志是20000行（OK）  wc -l /var/log/lottery_demo.log ---- linux下查看日志条数
+ *	wrk -t10 -c10 -d5 http://localhost:8080/lucky
  */
 package main
 
@@ -11,6 +16,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -46,6 +52,7 @@ var logger *log.Logger
 
 //奖品列表
 var giftList []*gift
+var mu sync.Mutex
 
 type lotteryController struct {
 	Ctx iris.Context
@@ -53,7 +60,7 @@ type lotteryController struct {
 
 //初始化日志
 func initLog() {
-	f, _ := os.Create("/var/log/lottery_demo.log")
+	f, _ := os.Create("D:\\daydayup代码\\go-lucky-draw\\lottery_demo.log")
 	logger = log.New(f, "", log.Ldate|log.Lmicroseconds)
 }
 
@@ -68,10 +75,10 @@ func initGift() {
 		gtype:    giftTypeRealLarge,
 		data:     "",
 		datalist: nil,
-		total:    10,
-		left:     10,
+		total:    20000,
+		left:     20000,
 		inuse:    true,
-		rate:     10,
+		rate:     10000,
 		rateMin:  0,
 		rateMax:  0,
 	}
@@ -87,13 +94,14 @@ func initGift() {
 		datalist: nil,
 		total:    5,
 		left:     5,
-		inuse:    true,
+		inuse:    false,
 		rate:     100,
 		rateMin:  0,
 		rateMax:  0,
 	}
 	giftList[1] = &g2
 
+	// 3 虚拟券，相同的编码
 	g3 := gift{
 		id:       3,
 		name:     "优惠券满200减50元",
@@ -102,15 +110,16 @@ func initGift() {
 		gtype:    giftTypeCouponFix,
 		data:     "mall-coupon-2018",
 		datalist: nil,
-		total:    5,
-		left:     5,
-		inuse:    true,
-		rate:     5000,
+		total:    50,
+		left:     50,
+		inuse:    false,
+		rate:     500,
 		rateMin:  0,
 		rateMax:  0,
 	}
 	giftList[2] = &g3
 
+	// 4 虚拟券，不相同的编码
 	g4 := gift{
 		id:       4,
 		name:     "直降优惠券50元",
@@ -119,10 +128,10 @@ func initGift() {
 		gtype:    giftTypeCoupon,
 		data:     "",
 		datalist: []string{"c01", "c02", "c03", "c04", "c05"},
-		total:    5,
-		left:     5,
-		inuse:    true,
-		rate:     2000,
+		total:    10,
+		left:     10,
+		inuse:    false,
+		rate:     100,
 		rateMin:  0,
 		rateMax:  0,
 	}
@@ -138,7 +147,7 @@ func initGift() {
 		datalist: nil,
 		total:    5,
 		left:     5,
-		inuse:    true,
+		inuse:    false,
 		rate:     5000,
 		rateMin:  0,
 		rateMax:  0,
@@ -192,6 +201,9 @@ func (c *lotteryController) Get() string {
 
 // GetLucky 抽奖 GET http://localhost:8080/lucky
 func (c *lotteryController) GetLucky() map[string]interface{} {
+	mu.Lock()
+	defer mu.Unlock()
+
 	code := luckyCode()
 	ok := false
 	result := make(map[string]interface{})
@@ -253,19 +265,19 @@ func sendCoin(data *gift) (bool, string) {
 	}
 }
 
+//发奖，优惠券（不同值）
 func sendCoupon(data *gift) (bool, string) {
-	if data.total == 0 {
-		//数量无限
-		return true, data.data
-	} else if data.left > 0 {
-		//还有剩余
-		data.left = data.left - 1
-		return true, data.data
+	if data.left > 0 {
+		//还有剩余的奖品
+		left := data.left - 1
+		data.left = left
+		return true, data.datalist[left]
 	} else {
 		return false, "奖品已发完"
 	}
 }
 
+//发奖，优惠券（固定值）
 func sendCouponFix(data *gift) (bool, string) {
 	if data.total == 0 {
 		//数量无限
